@@ -15,11 +15,13 @@ fn init(@builtin(global_invocation_id) invocation_id: vec3<u32>, @builtin(num_wo
 @compute @workgroup_size(8, 8, 1)
 fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     let location = vec2<i32>(i32(invocation_id.x), i32(invocation_id.y));
+    let textureDimensions = textureDimensions(output);
+    let ratio = f32(textureDimensions.x) / f32(textureDimensions.y);
 
     var i = 0;
     var z = vec2<f32>(0.0);
     var z2 = vec2<f32>(0.0);
-    let c = vec2<f32>(f32(location.x), f32(location.y)) / 100.0;
+    let c = (vec2<f32>(location) / vec2<f32>(textureDimensions) * 2.0 - 1.0) * vec2<f32>(ratio, 1.0);
     while (i <= 100 && z2.x + z2.y <= 4.0)
     {
         z = vec2<f32>(z2.x - z2.y, 2.0*z.x*z.y) + c;

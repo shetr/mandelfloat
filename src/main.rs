@@ -20,7 +20,7 @@ use std::borrow::Cow;
 /// This example uses a shader source file from the assets subdirectory
 const SHADER_ASSET_PATH: &str = "shaders/iterations.wgsl";
 
-const DISPLAY_FACTOR: u32 = 4;
+const DISPLAY_FACTOR: u32 = 1;
 const SIZE: (u32, u32) = (1280 / DISPLAY_FACTOR, 720 / DISPLAY_FACTOR);
 const WORKGROUP_SIZE: u32 = 8;
 
