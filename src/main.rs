@@ -6,15 +6,10 @@
 use bevy::{
     prelude::*,
     render::{
-        extract_resource::{ExtractResource, ExtractResourcePlugin},
-        render_asset::{RenderAssetUsages, RenderAssets},
-        render_graph::{self, RenderGraph, RenderLabel},
-        render_resource::{binding_types::texture_storage_2d, *},
-        renderer::{RenderContext, RenderDevice},
-        texture::GpuImage,
-        Render, RenderApp, RenderSet,
-    },
+        Render, RenderApp, RenderSet, extract_resource::{ExtractResource, ExtractResourcePlugin}, render_asset::{RenderAssetUsages, RenderAssets}, render_graph::{self, RenderGraph, RenderLabel}, render_resource::{binding_types::texture_storage_2d, *}, renderer::{RenderContext, RenderDevice}, texture::GpuImage
+    }, ui::RelativeCursorPosition,
 };
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use std::borrow::Cow;
 
 /// This example uses a shader source file from the assets subdirectory
@@ -44,9 +39,11 @@ fn main() {
                 })
                 .set(ImagePlugin::default_nearest()),
             MandelfloatComputePlugin,
+            EguiPlugin::default(),
         ))
         .add_systems(Startup, setup)
-        .add_systems(Update, switch_textures)
+        .add_systems(Update, (update_input, switch_textures).chain())
+        .add_systems(EguiPrimaryContextPass, ui_update)
         .run();
 }
 
@@ -67,14 +64,29 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let image0 = images.add(image.clone());
     let image1 = images.add(image);
 
-    commands.spawn((
-        Sprite {
-            image: image0.clone(),
-            custom_size: Some(Vec2::new(SIZE.0 as f32, SIZE.1 as f32)),
-            ..default()
-        },
-        Transform::from_scale(Vec3::splat(DISPLAY_FACTOR as f32)),
-    ));
+    commands.spawn(Node {
+        width: Val::Percent(100.0),
+        height: Val::Percent(100.0),
+        align_items: AlignItems::Center,
+        justify_content: JustifyContent::Center,
+        flex_direction: FlexDirection::Column,
+        ..default()
+    }).with_children(|parent| {
+        parent.spawn((
+            Node{
+                width: Val::Px(SIZE.0 as f32),
+                height: Val::Px(SIZE.1 as f32),
+                ..default()
+            },
+            ImageNode {
+                image: image0.clone(),
+                ..default()
+            },
+            Transform::from_scale(Vec3::splat(DISPLAY_FACTOR as f32)),
+            RelativeCursorPosition::default(),
+        ));
+    });
+
     commands.spawn(Camera2d);
 
     commands.insert_resource(MandelfloatShaderData {
@@ -83,13 +95,32 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     });
 }
 
+fn ui_update(mut contexts: EguiContexts) -> Result {
+    egui::Window::new("Hello").show(contexts.ctx_mut()?, |ui| {
+        ui.label("world");
+    });
+    Ok(())
+}
+
 // Switch texture to display every frame to show the one that was written to most recently.
-fn switch_textures(images: Res<MandelfloatShaderData>, mut sprite: Single<&mut Sprite>) {
-    if sprite.image == images.texture_a {
-        sprite.image = images.texture_b.clone_weak();
+fn switch_textures(images: Res<MandelfloatShaderData>, mut imgNode: Single<&mut ImageNode>) {
+    if imgNode.image == images.texture_a {
+        imgNode.image = images.texture_b.clone_weak();
     } else {
-        sprite.image = images.texture_a.clone_weak();
+        imgNode.image = images.texture_a.clone_weak();
     }
+}
+
+pub fn update_input(
+    mouse_button: Res<ButtonInput<MouseButton>>,
+    relative_cursor_position: Single<&RelativeCursorPosition>,
+) {
+    if mouse_button.pressed(MouseButton::Left) {
+        if let Some(relative_cursor_position) = relative_cursor_position.normalized {
+            println!("cursor pos {}", relative_cursor_position);
+        }
+    }
+
 }
 
 struct MandelfloatComputePlugin;
