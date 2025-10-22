@@ -94,7 +94,19 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     commands.insert_resource(MandelfloatUniforms {
         test_color: LinearRgba::WHITE,
+        positon: vec2(0.0, 0.0),
+        scale: 1.0,
     });
+
+    commands.insert_resource(MandelfloatData {
+        last_cursor_position: None
+    });
+}
+
+#[derive(Resource)]
+struct MandelfloatData
+{
+    last_cursor_position: Option<Vec2>
 }
 
 fn ui_update(mut contexts: EguiContexts) -> Result {
@@ -113,13 +125,22 @@ fn switch_textures(images: Res<MandelfloatImages>, mut img_node: Single<&mut Ima
     }
 }
 
-pub fn update_input(
+fn update_input(
+    mut uniforms: ResMut<MandelfloatUniforms>,
+    mut data: ResMut<MandelfloatData>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     relative_cursor_position: Single<&RelativeCursorPosition>,
 ) {
-    if mouse_button.pressed(MouseButton::Left) {
+    if mouse_button.just_pressed(MouseButton::Left) || mouse_button.just_released(MouseButton::Left) {
+        data.last_cursor_position = None;
+    } else if mouse_button.pressed(MouseButton::Left) {
         if let Some(relative_cursor_position) = relative_cursor_position.normalized {
-            println!("cursor pos {}", relative_cursor_position);
+            let ratio = vec2((SIZE.x as f32) / (SIZE.y as f32), 1.0);
+            let curr_cursor_position = relative_cursor_position * 2.0 * ratio;
+            if let Some(last_cursor_position) = data.last_cursor_position {
+                uniforms.positon += last_cursor_position - curr_cursor_position;
+            }
+            data.last_cursor_position = Some(curr_cursor_position);
         }
     }
 
@@ -164,6 +185,8 @@ struct MandelfloatImages {
 #[derive(Resource, Clone, ExtractResource, ShaderType)]
 struct MandelfloatUniforms {
     test_color: LinearRgba,
+    positon: Vec2,
+    scale: f32,
 }
 
 #[derive(Resource)]
