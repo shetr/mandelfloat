@@ -4,9 +4,7 @@
 //! is rendered to the screen.
 
 use bevy::{
-    asset::RenderAssetUsages,
-    prelude::*,
-    render::{
+    asset::RenderAssetUsages, input::mouse::MouseWheel, prelude::*, render::{
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_asset::RenderAssets,
         render_graph::{self, RenderGraph, RenderLabel},
@@ -17,7 +15,7 @@ use bevy::{
         renderer::{RenderContext, RenderDevice, RenderQueue},
         texture::GpuImage,
         Render, RenderApp, RenderSystems,
-    }, ui::RelativeCursorPosition,
+    }, ui::RelativeCursorPosition
     
 };
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
@@ -29,6 +27,7 @@ const SHADER_ASSET_PATH: &str = "shaders/iterations.wgsl";
 const DISPLAY_FACTOR: u32 = 1;
 const SIZE: UVec2 = UVec2::new(1280 / DISPLAY_FACTOR, 720 / DISPLAY_FACTOR);
 const WORKGROUP_SIZE: u32 = 8;
+const SCROLL_ZOOM_SPEED: f32 = 0.02;
 
 fn main() {
     App::new()
@@ -95,7 +94,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.insert_resource(MandelfloatUniforms {
         test_color: LinearRgba::WHITE,
         positon: vec2(0.0, 0.0),
-        scale: 1.0,
+        zoom: 0.0,
     });
 
     commands.insert_resource(MandelfloatData {
@@ -130,7 +129,13 @@ fn update_input(
     mut data: ResMut<MandelfloatData>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     relative_cursor_position: Single<&RelativeCursorPosition>,
+    mut mouse_wheel_reader: MessageReader<MouseWheel>,
 ) {
+    for mouse_wheel in mouse_wheel_reader.read() {
+        let zoom_increment = mouse_wheel.y.clamp(-3.0, 3.0);
+        uniforms.zoom += zoom_increment * SCROLL_ZOOM_SPEED;
+    }
+
     if mouse_button.just_pressed(MouseButton::Left) || mouse_button.just_released(MouseButton::Left) {
         data.last_cursor_position = None;
     } else if mouse_button.pressed(MouseButton::Left) {
@@ -138,12 +143,12 @@ fn update_input(
             let ratio = vec2((SIZE.x as f32) / (SIZE.y as f32), 1.0);
             let curr_cursor_position = relative_cursor_position * 2.0 * ratio;
             if let Some(last_cursor_position) = data.last_cursor_position {
-                uniforms.positon += last_cursor_position - curr_cursor_position;
+                let scale = 10.0f32.powf(-uniforms.zoom);
+                uniforms.positon += (last_cursor_position - curr_cursor_position) * scale;
             }
             data.last_cursor_position = Some(curr_cursor_position);
         }
     }
-
 }
 
 struct MandelfloatComputePlugin;
@@ -186,7 +191,7 @@ struct MandelfloatImages {
 struct MandelfloatUniforms {
     test_color: LinearRgba,
     positon: Vec2,
-    scale: f32,
+    zoom: f32,
 }
 
 #[derive(Resource)]

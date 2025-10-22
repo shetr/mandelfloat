@@ -8,7 +8,7 @@
 struct MandelfloatUniforms {
     test_color: vec4<f32>,
     position: vec2<f32>,
-    scale: f32,
+    zoom: f32,
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -27,7 +27,7 @@ fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     let ratio = f32(textureDimensions.x) / f32(textureDimensions.y);
 
     let normalized_location = (vec2<f32>(location) / vec2<f32>(textureDimensions) * 2.0 - 1.0) * vec2<f32>(ratio, 1.0);
-    let positon = normalized_location * (1.0 / config.scale) + config.position;
+    let positon = normalized_location * pow(10.0, -config.zoom) + config.position;
 
     var i = 0;
     var z = vec2<f32>(0.0);
