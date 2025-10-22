@@ -35,7 +35,7 @@ fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
         i++;
     }
 
-    let color = vec4<f32>(f32(i) / 100.0);
+    let color = config.test_color * vec4<f32>(f32(i) / 100.0);
 
     textureStore(output, location, color);
 }

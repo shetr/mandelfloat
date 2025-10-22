@@ -93,7 +93,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     });
 
     commands.insert_resource(MandelfloatUniforms {
-        test_color: LinearRgba::RED,
+        test_color: LinearRgba::WHITE,
     });
 }
 
