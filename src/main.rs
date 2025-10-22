@@ -4,10 +4,21 @@
 //! is rendered to the screen.
 
 use bevy::{
+    asset::RenderAssetUsages,
     prelude::*,
     render::{
-        Render, RenderApp, RenderSet, extract_resource::{ExtractResource, ExtractResourcePlugin}, render_asset::{RenderAssetUsages, RenderAssets}, render_graph::{self, RenderGraph, RenderLabel}, render_resource::{binding_types::texture_storage_2d, *}, renderer::{RenderContext, RenderDevice}, texture::GpuImage
+        extract_resource::{ExtractResource, ExtractResourcePlugin},
+        render_asset::RenderAssets,
+        render_graph::{self, RenderGraph, RenderLabel},
+        render_resource::{
+            binding_types::{texture_storage_2d, uniform_buffer},
+            *,
+        },
+        renderer::{RenderContext, RenderDevice, RenderQueue},
+        texture::GpuImage,
+        Render, RenderApp, RenderSystems,
     }, ui::RelativeCursorPosition,
+    
 };
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use std::borrow::Cow;
@@ -16,7 +27,7 @@ use std::borrow::Cow;
 const SHADER_ASSET_PATH: &str = "shaders/iterations.wgsl";
 
 const DISPLAY_FACTOR: u32 = 1;
-const SIZE: (u32, u32) = (1280 / DISPLAY_FACTOR, 720 / DISPLAY_FACTOR);
+const SIZE: UVec2 = UVec2::new(1280 / DISPLAY_FACTOR, 720 / DISPLAY_FACTOR);
 const WORKGROUP_SIZE: u32 = 8;
 
 fn main() {
@@ -26,11 +37,7 @@ fn main() {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        resolution: (
-                            (SIZE.0 * DISPLAY_FACTOR) as f32,
-                            (SIZE.1 * DISPLAY_FACTOR) as f32,
-                        )
-                            .into(),
+                        resolution: (SIZE * DISPLAY_FACTOR).into(),
                         // uncomment for unthrottled FPS
                         // present_mode: bevy::window::PresentMode::AutoNoVsync,
                         ..default()
@@ -48,17 +55,8 @@ fn main() {
 }
 
 fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    let mut image = Image::new_fill(
-        Extent3d {
-            width: SIZE.0,
-            height: SIZE.1,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        &[0, 0, 0, 255],
-        TextureFormat::R32Float,
-        RenderAssetUsages::RENDER_WORLD,
-    );
+    let mut image = Image::new_target_texture(SIZE.x, SIZE.y, TextureFormat::Rgba32Float);
+    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
     image.texture_descriptor.usage =
         TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
     let image0 = images.add(image.clone());
@@ -74,8 +72,8 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     }).with_children(|parent| {
         parent.spawn((
             Node{
-                width: Val::Px(SIZE.0 as f32),
-                height: Val::Px(SIZE.1 as f32),
+                width: Val::Px(SIZE.x as f32),
+                height: Val::Px(SIZE.y as f32),
                 ..default()
             },
             ImageNode {
@@ -89,9 +87,13 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     commands.spawn(Camera2d);
 
-    commands.insert_resource(MandelfloatShaderData {
+    commands.insert_resource(MandelfloatImages {
         texture_a: image0,
         texture_b: image1,
+    });
+
+    commands.insert_resource(MandelfloatUniforms {
+        test_color: LinearRgba::RED,
     });
 }
 
@@ -103,11 +105,11 @@ fn ui_update(mut contexts: EguiContexts) -> Result {
 }
 
 // Switch texture to display every frame to show the one that was written to most recently.
-fn switch_textures(images: Res<MandelfloatShaderData>, mut imgNode: Single<&mut ImageNode>) {
-    if imgNode.image == images.texture_a {
-        imgNode.image = images.texture_b.clone_weak();
+fn switch_textures(images: Res<MandelfloatImages>, mut img_node: Single<&mut ImageNode>) {
+    if img_node.image == images.texture_a {
+        img_node.image = images.texture_b.clone();
     } else {
-        imgNode.image = images.texture_a.clone_weak();
+        img_node.image = images.texture_a.clone();
     }
 }
 
@@ -132,11 +134,14 @@ impl Plugin for MandelfloatComputePlugin {
     fn build(&self, app: &mut App) {
         // Extract the game of life image resource from the main world into the render world
         // for operation on by the compute shader and display on the sprite.
-        app.add_plugins(ExtractResourcePlugin::<MandelfloatShaderData>::default());
+        app.add_plugins(
+            (ExtractResourcePlugin::<MandelfloatImages>::default(),
+            ExtractResourcePlugin::<MandelfloatUniforms>::default(),
+        ));
         let render_app = app.sub_app_mut(RenderApp);
         render_app.add_systems(
             Render,
-            prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
+            prepare_bind_group.in_set(RenderSystems::PrepareBindGroups),
         );
 
         let mut render_graph = render_app.world_mut().resource_mut::<RenderGraph>();
@@ -151,9 +156,14 @@ impl Plugin for MandelfloatComputePlugin {
 }
 
 #[derive(Resource, Clone, ExtractResource)]
-struct MandelfloatShaderData {
+struct MandelfloatImages {
     texture_a: Handle<Image>,
     texture_b: Handle<Image>,
+}
+
+#[derive(Resource, Clone, ExtractResource, ShaderType)]
+struct MandelfloatUniforms {
+    test_color: LinearRgba,
 }
 
 #[derive(Resource)]
@@ -163,20 +173,34 @@ fn prepare_bind_group(
     mut commands: Commands,
     pipeline: Res<MandelfloatPipeline>,
     gpu_images: Res<RenderAssets<GpuImage>>,
-    mandelfloat_shader_data: Res<MandelfloatShaderData>,
+    mandelfloat_images: Res<MandelfloatImages>,
+    mandelfloat_uniforms: Res<MandelfloatUniforms>,
     render_device: Res<RenderDevice>,
+    queue: Res<RenderQueue>,
 ) {
-    let view_a = gpu_images.get(&mandelfloat_shader_data.texture_a).unwrap();
-    let view_b = gpu_images.get(&mandelfloat_shader_data.texture_b).unwrap();
+    let view_a = gpu_images.get(&mandelfloat_images.texture_a).unwrap();
+    let view_b = gpu_images.get(&mandelfloat_images.texture_b).unwrap();
+    
+    let mut uniform_buffer = UniformBuffer::from(mandelfloat_uniforms.into_inner());
+    uniform_buffer.write_buffer(&render_device, &queue);
+
     let bind_group_0 = render_device.create_bind_group(
         None,
         &pipeline.texture_bind_group_layout,
-        &BindGroupEntries::sequential((&view_a.texture_view, &view_b.texture_view)),
+        &BindGroupEntries::sequential((
+            &view_a.texture_view,
+            &view_b.texture_view,
+            &uniform_buffer,
+        )),
     );
     let bind_group_1 = render_device.create_bind_group(
         None,
         &pipeline.texture_bind_group_layout,
-        &BindGroupEntries::sequential((&view_b.texture_view, &view_a.texture_view)),
+        &BindGroupEntries::sequential((
+            &view_b.texture_view,
+            &view_a.texture_view,
+            &uniform_buffer,
+        )),
     );
     commands.insert_resource(MandelfloatImageBindGroups([bind_group_0, bind_group_1]));
 }
@@ -196,8 +220,9 @@ impl FromWorld for MandelfloatPipeline {
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
-                    texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::ReadOnly),
-                    texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::WriteOnly),
+                    texture_storage_2d(TextureFormat::Rgba32Float, StorageTextureAccess::ReadOnly),
+                    texture_storage_2d(TextureFormat::Rgba32Float, StorageTextureAccess::WriteOnly),
+                    uniform_buffer::<MandelfloatUniforms>(false),
                 ),
             ),
         );
@@ -209,7 +234,7 @@ impl FromWorld for MandelfloatPipeline {
             push_constant_ranges: Vec::new(),
             shader: shader.clone(),
             shader_defs: vec![],
-            entry_point: Cow::from("init"),
+            entry_point: Some(Cow::from("init")),
             zero_initialize_workgroup_memory: false,
         });
         let update_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -218,7 +243,7 @@ impl FromWorld for MandelfloatPipeline {
             push_constant_ranges: Vec::new(),
             shader,
             shader_defs: vec![],
-            entry_point: Cow::from("update"),
+            entry_point: Some(Cow::from("update")),
             zero_initialize_workgroup_memory: false,
         });
 
@@ -306,7 +331,7 @@ impl render_graph::Node for MandelfloatNode {
                     .unwrap();
                 pass.set_bind_group(0, &bind_groups[0], &[]);
                 pass.set_pipeline(init_pipeline);
-                pass.dispatch_workgroups(SIZE.0 / WORKGROUP_SIZE, SIZE.1 / WORKGROUP_SIZE, 1);
+                pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
             }
             MandelfloatState::Update(index) => {
                 let update_pipeline = pipeline_cache
@@ -314,7 +339,7 @@ impl render_graph::Node for MandelfloatNode {
                     .unwrap();
                 pass.set_bind_group(0, &bind_groups[index], &[]);
                 pass.set_pipeline(update_pipeline);
-                pass.dispatch_workgroups(SIZE.0 / WORKGROUP_SIZE, SIZE.1 / WORKGROUP_SIZE, 1);
+                pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
             }
         }
 
