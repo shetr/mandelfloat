@@ -30,6 +30,7 @@ const WORKGROUP_SIZE: u32 = 8;
 const SCROLL_ZOOM_SPEED: f32 = 0.02;
 const KEY_ZOOM_SPEED: f32 = 0.25;
 const MOVE_SPEED: f32 = 1.0;
+const ROTATION_SPEED: f32 = 0.5;
 
 fn main() {
     App::new()
@@ -102,6 +103,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         last_cursor_position: None,
         position: vec2(0.0, 0.0),
         zoom: 0.0,
+        rotation_angle: 0.0,
     });
 }
 
@@ -111,6 +113,7 @@ struct MandelfloatData
     last_cursor_position: Option<Vec2>,
     position: Vec2,
     zoom: f32,
+    rotation_angle: f32,
 }
 
 fn ui_update(mut contexts: EguiContexts) -> Result {
@@ -134,9 +137,9 @@ fn compute_scale(zoom: f32) -> f32
     10.0f32.powf(-zoom)
 }
 
-fn compute_transform(position: Vec2, scale: f32) -> Mat3
+fn compute_transform(position: Vec2, scale: f32, rotation_angle: f32) -> Mat3
 {
-    Mat3::from_scale_angle_translation(vec2(scale, scale), 0.0, position)
+    Mat3::from_scale_angle_translation(vec2(scale, scale), rotation_angle, position)
 }
 
 fn update_input(
@@ -160,7 +163,15 @@ fn update_input(
         data.zoom -= KEY_ZOOM_SPEED * time.delta_secs();
     }
     
+    if keyboard_input.pressed(KeyCode::KeyQ) {
+        data.rotation_angle += ROTATION_SPEED * time.delta_secs();
+    }
+    if keyboard_input.pressed(KeyCode::KeyE) {
+        data.rotation_angle -= ROTATION_SPEED * time.delta_secs();
+    }
+    
     let scale = compute_scale(data.zoom);
+    let rot_scale_mat = Mat2::from_scale_angle(vec2(scale, scale), data.rotation_angle);
 
     if mouse_button.just_pressed(MouseButton::Left) || mouse_button.just_released(MouseButton::Left) {
         data.last_cursor_position = None;
@@ -169,26 +180,26 @@ fn update_input(
             let ratio = vec2((SIZE.x as f32) / (SIZE.y as f32), -1.0);
             let curr_cursor_position = relative_cursor_position * 2.0 * ratio;
             if let Some(last_cursor_position) = data.last_cursor_position {
-                data.position += (last_cursor_position - curr_cursor_position) * scale;
+                data.position += rot_scale_mat * (last_cursor_position - curr_cursor_position);
             }
             data.last_cursor_position = Some(curr_cursor_position);
         }
     }
 
     if keyboard_input.pressed(KeyCode::ArrowLeft) || keyboard_input.pressed(KeyCode::KeyA) {
-        data.position.x -= MOVE_SPEED * scale * time.delta_secs();
+        data.position -= rot_scale_mat.col(0) * MOVE_SPEED * time.delta_secs();
     }
     if keyboard_input.pressed(KeyCode::ArrowRight) || keyboard_input.pressed(KeyCode::KeyD) {
-        data.position.x += MOVE_SPEED * scale * time.delta_secs();
+        data.position += rot_scale_mat.col(0) * MOVE_SPEED * time.delta_secs();
     }
     if keyboard_input.pressed(KeyCode::ArrowDown) || keyboard_input.pressed(KeyCode::KeyS) {
-        data.position.y -= MOVE_SPEED * scale * time.delta_secs();
+        data.position -= rot_scale_mat.col(1) * MOVE_SPEED * time.delta_secs();
     }
     if keyboard_input.pressed(KeyCode::ArrowUp) || keyboard_input.pressed(KeyCode::KeyW) {
-        data.position.y += MOVE_SPEED * scale * time.delta_secs();
+        data.position += rot_scale_mat.col(1) * MOVE_SPEED * time.delta_secs();
     }
 
-    uniforms.transform = compute_transform(data.position, scale);
+    uniforms.transform = compute_transform(data.position, scale, data.rotation_angle);
 }
 
 struct MandelfloatComputePlugin;
