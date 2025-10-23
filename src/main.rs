@@ -18,7 +18,7 @@ use bevy::{
     }, ui::RelativeCursorPosition
     
 };
-use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::{egui, input::egui_wants_any_input, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use std::borrow::Cow;
 
 /// This example uses a shader source file from the assets subdirectory
@@ -52,8 +52,11 @@ fn main() {
             EguiPlugin::default(),
         ))
         .add_systems(Startup, setup)
-        .add_systems(Update, (update_input, switch_textures).chain())
         .add_systems(EguiPrimaryContextPass, ui_update)
+        .add_systems(Update, (
+            update_input.run_if(not(egui_wants_any_input)),
+            switch_textures
+        ).chain())
         .run();
 }
 
