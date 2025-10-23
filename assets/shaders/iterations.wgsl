@@ -26,7 +26,7 @@ fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     let textureDimensions = textureDimensions(output);
     let ratio = f32(textureDimensions.x) / f32(textureDimensions.y);
 
-    let normalized_location = (vec2<f32>(location) / vec2<f32>(textureDimensions) * 2.0 - 1.0) * vec2<f32>(ratio, 1.0);
+    let normalized_location = (vec2<f32>(location) / vec2<f32>(textureDimensions) * 2.0 - 1.0) * vec2<f32>(ratio, -1.0);
     let positon = normalized_location * pow(10.0, -config.zoom) + config.position;
 
     var i = 0;

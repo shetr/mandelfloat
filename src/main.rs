@@ -28,6 +28,8 @@ const DISPLAY_FACTOR: u32 = 1;
 const SIZE: UVec2 = UVec2::new(1280 / DISPLAY_FACTOR, 720 / DISPLAY_FACTOR);
 const WORKGROUP_SIZE: u32 = 8;
 const SCROLL_ZOOM_SPEED: f32 = 0.02;
+const KEY_ZOOM_SPEED: f32 = 0.25;
+const MOVE_SPEED: f32 = 1.0;
 
 fn main() {
     App::new()
@@ -130,24 +132,47 @@ fn update_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     relative_cursor_position: Single<&RelativeCursorPosition>,
     mut mouse_wheel_reader: MessageReader<MouseWheel>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
 ) {
     for mouse_wheel in mouse_wheel_reader.read() {
         let zoom_increment = mouse_wheel.y.clamp(-3.0, 3.0);
         uniforms.zoom += zoom_increment * SCROLL_ZOOM_SPEED;
     }
 
+    if keyboard_input.pressed(KeyCode::NumpadAdd) || keyboard_input.pressed(KeyCode::KeyM) {
+        uniforms.zoom += KEY_ZOOM_SPEED * time.delta_secs();
+    }
+    if keyboard_input.pressed(KeyCode::NumpadSubtract) || keyboard_input.pressed(KeyCode::KeyN) {
+        uniforms.zoom -= KEY_ZOOM_SPEED * time.delta_secs();
+    }
+    
+    let scale = 10.0f32.powf(-uniforms.zoom);
+
     if mouse_button.just_pressed(MouseButton::Left) || mouse_button.just_released(MouseButton::Left) {
         data.last_cursor_position = None;
     } else if mouse_button.pressed(MouseButton::Left) {
         if let Some(relative_cursor_position) = relative_cursor_position.normalized {
-            let ratio = vec2((SIZE.x as f32) / (SIZE.y as f32), 1.0);
+            let ratio = vec2((SIZE.x as f32) / (SIZE.y as f32), -1.0);
             let curr_cursor_position = relative_cursor_position * 2.0 * ratio;
             if let Some(last_cursor_position) = data.last_cursor_position {
-                let scale = 10.0f32.powf(-uniforms.zoom);
                 uniforms.positon += (last_cursor_position - curr_cursor_position) * scale;
             }
             data.last_cursor_position = Some(curr_cursor_position);
         }
+    }
+
+    if keyboard_input.pressed(KeyCode::ArrowLeft) || keyboard_input.pressed(KeyCode::KeyA) {
+        uniforms.positon.x -= MOVE_SPEED * scale * time.delta_secs();
+    }
+    if keyboard_input.pressed(KeyCode::ArrowRight) || keyboard_input.pressed(KeyCode::KeyD) {
+        uniforms.positon.x += MOVE_SPEED * scale * time.delta_secs();
+    }
+    if keyboard_input.pressed(KeyCode::ArrowDown) || keyboard_input.pressed(KeyCode::KeyS) {
+        uniforms.positon.y -= MOVE_SPEED * scale * time.delta_secs();
+    }
+    if keyboard_input.pressed(KeyCode::ArrowUp) || keyboard_input.pressed(KeyCode::KeyW) {
+        uniforms.positon.y += MOVE_SPEED * scale * time.delta_secs();
     }
 }
 
