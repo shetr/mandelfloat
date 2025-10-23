@@ -31,6 +31,7 @@ const SCROLL_ZOOM_SPEED: f32 = 0.02;
 const KEY_ZOOM_SPEED: f32 = 0.25;
 const MOVE_SPEED: f32 = 1.0;
 const ROTATION_SPEED: f32 = 0.5;
+const SPEED_MULTIPILER: f32 = 2.0;
 
 fn main() {
     App::new()
@@ -156,18 +157,20 @@ fn update_input(
         data.zoom += zoom_increment * SCROLL_ZOOM_SPEED;
     }
 
+    let speed_mul = if keyboard_input.pressed(KeyCode::ShiftLeft) { SPEED_MULTIPILER } else { 1.0 };
+
     if keyboard_input.pressed(KeyCode::NumpadAdd) || keyboard_input.pressed(KeyCode::KeyM) {
-        data.zoom += KEY_ZOOM_SPEED * time.delta_secs();
+        data.zoom += KEY_ZOOM_SPEED * speed_mul * time.delta_secs();
     }
     if keyboard_input.pressed(KeyCode::NumpadSubtract) || keyboard_input.pressed(KeyCode::KeyN) {
-        data.zoom -= KEY_ZOOM_SPEED * time.delta_secs();
+        data.zoom -= KEY_ZOOM_SPEED * speed_mul * time.delta_secs();
     }
     
     if keyboard_input.pressed(KeyCode::KeyQ) {
-        data.rotation_angle += ROTATION_SPEED * time.delta_secs();
+        data.rotation_angle += ROTATION_SPEED * speed_mul * time.delta_secs();
     }
     if keyboard_input.pressed(KeyCode::KeyE) {
-        data.rotation_angle -= ROTATION_SPEED * time.delta_secs();
+        data.rotation_angle -= ROTATION_SPEED * speed_mul * time.delta_secs();
     }
     
     let scale = compute_scale(data.zoom);
@@ -187,16 +190,16 @@ fn update_input(
     }
 
     if keyboard_input.pressed(KeyCode::ArrowLeft) || keyboard_input.pressed(KeyCode::KeyA) {
-        data.position -= rot_scale_mat.col(0) * MOVE_SPEED * time.delta_secs();
+        data.position -= rot_scale_mat.col(0) * MOVE_SPEED * speed_mul * time.delta_secs();
     }
     if keyboard_input.pressed(KeyCode::ArrowRight) || keyboard_input.pressed(KeyCode::KeyD) {
-        data.position += rot_scale_mat.col(0) * MOVE_SPEED * time.delta_secs();
+        data.position += rot_scale_mat.col(0) * MOVE_SPEED * speed_mul * time.delta_secs();
     }
     if keyboard_input.pressed(KeyCode::ArrowDown) || keyboard_input.pressed(KeyCode::KeyS) {
-        data.position -= rot_scale_mat.col(1) * MOVE_SPEED * time.delta_secs();
+        data.position -= rot_scale_mat.col(1) * MOVE_SPEED * speed_mul * time.delta_secs();
     }
     if keyboard_input.pressed(KeyCode::ArrowUp) || keyboard_input.pressed(KeyCode::KeyW) {
-        data.position += rot_scale_mat.col(1) * MOVE_SPEED * time.delta_secs();
+        data.position += rot_scale_mat.col(1) * MOVE_SPEED * speed_mul * time.delta_secs();
     }
 
     uniforms.transform = compute_transform(data.position, scale, data.rotation_angle);
