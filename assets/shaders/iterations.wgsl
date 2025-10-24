@@ -1,41 +1,26 @@
 
-@group(0) @binding(0) var<storage, read> input: array<IterationResult>;
+@group(0) @binding(0) var z_x: texture_storage_2d<r32float, read_write>;
 
-@group(0) @binding(1) var<storage, read_write> output: array<IterationResult>;
+@group(0) @binding(1) var z_y: texture_storage_2d<r32float, read_write>;
 
-@group(0) @binding(2) var<uniform> config: IterationsUniforms;
+@group(0) @binding(2) var iteration: texture_storage_2d<r32uint, read_write>;
 
-@group(0) @binding(3) var<uniform> shared_config: SharedUniforms;
+@group(0) @binding(3) var<uniform> config: IterationsUniforms;
+
+@group(0) @binding(4) var<uniform> shared_config: SharedUniforms;
 
 struct IterationsUniforms {
     transform: mat3x3<f32>,
-    dimensions: vec2<u32>
 }
 
 struct SharedUniforms {
     max_iterations: u32,
 }
 
-struct IterationResult {
-    z: vec2<f32>,
-    i: u32,
-}
-
 @compute @workgroup_size(8, 8, 1)
-fn init(@builtin(global_invocation_id) invocation_id: vec3<u32>, @builtin(num_workgroups) num_workgroups: vec3<u32>) {
-    let location = invocation_id.xy;
-    let dimensions = config.dimensions;
-    let storage_index = location.x + dimensions.x * location.y;
-
-    output[storage_index].i = 0u;
-    output[storage_index].z = vec2<f32>(0.0);
-}
-
-@compute @workgroup_size(8, 8, 1)
-fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
-    let location = invocation_id.xy;
-    let dimensions = config.dimensions;
-    let storage_index = location.x + dimensions.x * location.y;
+fn iterate(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
+    let location = vec2<i32>(i32(invocation_id.x), i32(invocation_id.y));
+    let dimensions = textureDimensions(iteration);
 
     let ratio = f32(dimensions.x) / f32(dimensions.y);
 
@@ -53,6 +38,7 @@ fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
         i++;
     }
 
-    output[storage_index].i = i;
-    output[storage_index].z = z;
+    textureStore(iteration, location, vec4<u32>(i));
+    textureStore(z_x, location, vec4<f32>(z.x));
+    textureStore(z_y, location, vec4<f32>(z.y));
 }

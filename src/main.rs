@@ -6,21 +6,21 @@
 use bevy::{
     asset::RenderAssetUsages, input::mouse::MouseWheel, prelude::*, render::{
         extract_resource::{ExtractResource, ExtractResourcePlugin}, render_asset::RenderAssets, render_graph::{self, RenderGraph, RenderLabel}, render_resource::{
-            binding_types::{storage_buffer_read_only_sized, storage_buffer_sized, texture_storage_2d, uniform_buffer},
+            binding_types::{texture_storage_2d, uniform_buffer},
             *,
         }, renderer::{RenderContext, RenderDevice, RenderQueue}, texture::GpuImage, Render, RenderApp, RenderSystems
     }, ui::RelativeCursorPosition
     
 };
 use bevy_egui::{egui, input::egui_wants_any_input, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-use std::{borrow::Cow, num::NonZero};
+use std::{borrow::Cow};
 
 /// This example uses a shader source file from the assets subdirectory
 const ITERATIONS_SHADER_ASSET_PATH: &str = "shaders/iterations.wgsl";
 const VISUALIZE_SHADER_ASSET_PATH: &str = "shaders/visualize.wgsl";
 
 const DISPLAY_FACTOR: u32 = 1;
-const SIZE: UVec2 = UVec2::new(1280 / DISPLAY_FACTOR, 720 / DISPLAY_FACTOR);
+const SIZE: UVec2 = UVec2::new(1280, 720);
 const WORKGROUP_SIZE: u32 = 8;
 const SCROLL_ZOOM_SPEED: f32 = 0.02;
 const KEY_ZOOM_SPEED: f32 = 0.25;
@@ -37,7 +37,7 @@ fn main() {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        resolution: (SIZE * DISPLAY_FACTOR).into(),
+                        resolution: (SIZE).into(),
                         // uncomment for unthrottled FPS
                         // present_mode: bevy::window::PresentMode::AutoNoVsync,
                         ..default()
@@ -58,11 +58,29 @@ fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let mut image = Image::new_target_texture(SIZE.x, SIZE.y, TextureFormat::Rgba32Float);
-    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
-    image.texture_descriptor.usage =
+    let mut out_image = Image::new_target_texture(SIZE.x, SIZE.y, TextureFormat::Rgba32Float);
+    out_image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    out_image.texture_descriptor.usage =
         TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
-    let image_handle = images.add(image);
+    let out_image_handle = images.add(out_image);
+
+    let mut i_image = Image::new_target_texture(SIZE.x, SIZE.y, TextureFormat::R32Uint);
+    i_image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    i_image.texture_descriptor.usage =
+        TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
+    let i_image_handle = images.add(i_image);
+    
+    let mut z_x_image = Image::new_target_texture(SIZE.x, SIZE.y, TextureFormat::R32Float);
+    z_x_image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    z_x_image.texture_descriptor.usage =
+        TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
+    let z_x_image_handle = images.add(z_x_image);
+
+    let mut z_y_image = Image::new_target_texture(SIZE.x, SIZE.y, TextureFormat::R32Float);
+    z_y_image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    z_y_image.texture_descriptor.usage =
+        TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
+    let z_y_image_handle = images.add(z_y_image);
 
     commands.spawn(Node {
         width: Val::Percent(100.0),
@@ -79,18 +97,21 @@ fn setup(
                 ..default()
             },
             ImageNode {
-                image: image_handle.clone(),
+                image: out_image_handle.clone(),
                 ..default()
             },
-            Transform::from_scale(Vec3::splat(DISPLAY_FACTOR as f32)),
+            //Transform::from_scale(Vec3::splat(DISPLAY_FACTOR as f32)),
             RelativeCursorPosition::default(),
         ));
     });
 
     commands.spawn(Camera2d);
 
-    commands.insert_resource(OutputImage {
-        texture: image_handle,
+    commands.insert_resource(ComputeImages {
+        output_texture: out_image_handle,
+        i_texture: i_image_handle,
+        z_x_texture: z_x_image_handle,
+        z_y_texture: z_y_image_handle,
     });
 
     commands.insert_resource(IterationsUniforms {
@@ -227,7 +248,7 @@ impl Plugin for MandelfloatComputePlugin {
         // Extract the game of life image resource from the main world into the render world
         // for operation on by the compute shader and display on the sprite.
         app.add_plugins(
-            (ExtractResourcePlugin::<OutputImage>::default(),
+            (ExtractResourcePlugin::<ComputeImages>::default(),
             ExtractResourcePlugin::<IterationsUniforms>::default(),
             ExtractResourcePlugin::<VisualizeUniforms>::default(),
             ExtractResourcePlugin::<SharedUniforms>::default(),
@@ -250,8 +271,11 @@ impl Plugin for MandelfloatComputePlugin {
 }
 
 #[derive(Resource, Clone, ExtractResource)]
-struct OutputImage {
-    texture: Handle<Image>,
+struct ComputeImages {
+    output_texture: Handle<Image>,
+    i_texture: Handle<Image>,
+    z_x_texture: Handle<Image>,
+    z_y_texture: Handle<Image>,
 }
 
 #[derive(Resource, Clone, ExtractResource, ShaderType)]
@@ -271,31 +295,28 @@ struct SharedUniforms {
     max_iterations: u32,
 }
 
-#[derive(Resource, Clone, Copy, ExtractResource, ShaderType)]
-struct IterationResult {
-    z: Vec2,
-    i: u32,
-}
-
 #[derive(Resource)]
 struct MandelfloatBindGroups
 {
-    iter: [BindGroup; 2],
-    vis: [BindGroup; 2],
+    iter: BindGroup,
+    vis: BindGroup,
 }
 
 fn prepare_bind_group(
     mut commands: Commands,
     pipeline: Res<MandelfloatPipeline>,
     gpu_images: Res<RenderAssets<GpuImage>>,
-    output_image: Res<OutputImage>,
+    output_image: Res<ComputeImages>,
     iterations_uniforms: Res<IterationsUniforms>,
     visualize_uniforms: Res<VisualizeUniforms>,
     shared_uniforms: Res<SharedUniforms>,
     render_device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
 ) {
-    let view = gpu_images.get(&output_image.texture).unwrap();
+    let out_view = gpu_images.get(&output_image.output_texture).unwrap();
+    let i_view = gpu_images.get(&output_image.i_texture).unwrap();
+    let z_x_view = gpu_images.get(&output_image.z_x_texture).unwrap();
+    let z_y_view = gpu_images.get(&output_image.z_y_texture).unwrap();
     
     let mut iter_uniform_buffer = UniformBuffer::from(iterations_uniforms.into_inner());
     iter_uniform_buffer.write_buffer(&render_device, &queue);
@@ -306,55 +327,30 @@ fn prepare_bind_group(
     let mut shared_uniform_buffer = UniformBuffer::from(shared_uniforms.into_inner());
     shared_uniform_buffer.write_buffer(&render_device, &queue);
 
-    let buffer_data = vec![IterationResult { i:0, z: Vec2::ZERO }; (SIZE.x * SIZE.y) as usize];
-    let mut buffer1 = StorageBuffer::from(buffer_data.clone());
-    let mut buffer2 = StorageBuffer::from(buffer_data);
-    buffer1.write_buffer(&render_device, &queue);
-    buffer2.write_buffer(&render_device, &queue);
-
-    let iter_bind_group_0 = render_device.create_bind_group(
+    let iter_bind_group = render_device.create_bind_group(
         None,
         &pipeline.iter_bind_group_layout,
         &BindGroupEntries::sequential((
-            &buffer1,
-            &buffer2,
+            &z_x_view.texture_view,
+            &z_y_view.texture_view,
+            &i_view.texture_view,
             &iter_uniform_buffer,
             &shared_uniform_buffer,
         )),
     );
-    let iter_bind_group_1 = render_device.create_bind_group(
-        None,
-        &pipeline.iter_bind_group_layout,
-        &BindGroupEntries::sequential((
-            &buffer2,
-            &buffer1,
-            &iter_uniform_buffer,
-            &shared_uniform_buffer,
-        )),
-    );
-    let vis_bind_group_0 = render_device.create_bind_group(
+    let vis_bind_group = render_device.create_bind_group(
         None,
         &pipeline.vis_bind_group_layout,
         &BindGroupEntries::sequential((
-            &buffer2,
-            &view.texture_view,
-            &vis_uniform_buffer,
-            &shared_uniform_buffer,
-        )),
-    );
-    let vis_bind_group_1 = render_device.create_bind_group(
-        None,
-        &pipeline.vis_bind_group_layout,
-        &BindGroupEntries::sequential((
-            &buffer1,
-            &view.texture_view,
+            &i_view.texture_view,
+            &out_view.texture_view,
             &vis_uniform_buffer,
             &shared_uniform_buffer,
         )),
     );
     commands.insert_resource(MandelfloatBindGroups {
-        iter: [iter_bind_group_0, iter_bind_group_1],
-        vis: [vis_bind_group_0, vis_bind_group_1],
+        iter: iter_bind_group,
+        vis: vis_bind_group,
     });
 }
 
@@ -362,22 +358,21 @@ fn prepare_bind_group(
 struct MandelfloatPipeline {
     iter_bind_group_layout: BindGroupLayout,
     vis_bind_group_layout: BindGroupLayout,
-    iter_init_pipeline: CachedComputePipelineId,
-    iter_update_pipeline: CachedComputePipelineId,
+    iter_pipeline: CachedComputePipelineId,
     vis_pipeline: CachedComputePipelineId,
 }
 
 impl FromWorld for MandelfloatPipeline {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.resource::<RenderDevice>();
-        let storage_size = NonZero::<u64>::new((SIZE.x * SIZE.y * (size_of::<IterationResult>() as u32)) as u64);
         let iter_bind_group_layout = render_device.create_bind_group_layout(
             "IterLayout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
-                    storage_buffer_read_only_sized(false, storage_size),
-                    storage_buffer_sized(false, storage_size),
+                    texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::ReadWrite),
+                    texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::ReadWrite),
+                    texture_storage_2d(TextureFormat::R32Uint, StorageTextureAccess::ReadWrite),
                     uniform_buffer::<IterationsUniforms>(false),
                     uniform_buffer::<SharedUniforms>(false),
                 ),
@@ -388,7 +383,7 @@ impl FromWorld for MandelfloatPipeline {
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
-                    storage_buffer_read_only_sized(false, storage_size),
+                    texture_storage_2d(TextureFormat::R32Uint, StorageTextureAccess::ReadOnly),
                     texture_storage_2d(TextureFormat::Rgba32Float, StorageTextureAccess::WriteOnly),
                     uniform_buffer::<VisualizeUniforms>(false),
                     uniform_buffer::<SharedUniforms>(false),
@@ -398,22 +393,13 @@ impl FromWorld for MandelfloatPipeline {
         let iter_shader = world.load_asset(ITERATIONS_SHADER_ASSET_PATH);
         let vis_shader = world.load_asset(VISUALIZE_SHADER_ASSET_PATH);
         let pipeline_cache = world.resource::<PipelineCache>();
-        let iter_init_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: None,
-            layout: vec![iter_bind_group_layout.clone()],
-            push_constant_ranges: Vec::new(),
-            shader: iter_shader.clone(),
-            shader_defs: vec![],
-            entry_point: Some(Cow::from("init")),
-            zero_initialize_workgroup_memory: false,
-        });
-        let iter_update_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+        let iter_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: None,
             layout: vec![iter_bind_group_layout.clone()],
             push_constant_ranges: Vec::new(),
             shader: iter_shader,
             shader_defs: vec![],
-            entry_point: Some(Cow::from("update")),
+            entry_point: Some(Cow::from("iterate")),
             zero_initialize_workgroup_memory: false,
         });
         let vis_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
@@ -429,8 +415,7 @@ impl FromWorld for MandelfloatPipeline {
         MandelfloatPipeline {
             iter_bind_group_layout,
             vis_bind_group_layout,
-            iter_init_pipeline,
-            iter_update_pipeline,
+            iter_pipeline,
             vis_pipeline,
         }
     }
@@ -439,8 +424,7 @@ impl FromWorld for MandelfloatPipeline {
 #[derive(PartialEq, Eq)]
 enum MandelfloatState {
     Loading,
-    Init,
-    Update(usize),
+    Update,
 }
 
 struct MandelfloatNode {
@@ -464,7 +448,7 @@ impl render_graph::Node for MandelfloatNode {
         match self.state {
             MandelfloatState::Loading => {
                 let mut all_ok = true;
-                match pipeline_cache.get_compute_pipeline_state(pipeline.iter_init_pipeline) {
+                match pipeline_cache.get_compute_pipeline_state(pipeline.iter_pipeline) {
                     CachedPipelineState::Ok(_) => {}
                     CachedPipelineState::Err(err) => {
                         panic!("Initializing assets/{ITERATIONS_SHADER_ASSET_PATH}:\n{err}")
@@ -483,27 +467,10 @@ impl render_graph::Node for MandelfloatNode {
                     }
                 }
                 if all_ok {
-                    self.state = MandelfloatState::Init;
+                    self.state = MandelfloatState::Update;
                 }
             }
-            MandelfloatState::Init => {
-                if let CachedPipelineState::Ok(_) =
-                    pipeline_cache.get_compute_pipeline_state(pipeline.iter_update_pipeline)
-                {
-                    if let CachedPipelineState::Ok(_) =
-                    pipeline_cache.get_compute_pipeline_state(pipeline.vis_pipeline)
-                    {
-                        self.state = MandelfloatState::Update(1);
-                    }
-                }
-            }
-            MandelfloatState::Update(0) => {
-                self.state = MandelfloatState::Update(1);
-            }
-            MandelfloatState::Update(1) => {
-                self.state = MandelfloatState::Update(0);
-            }
-            MandelfloatState::Update(_) => unreachable!(),
+            MandelfloatState::Update => {}
         }
     }
 
@@ -517,56 +484,32 @@ impl render_graph::Node for MandelfloatNode {
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<MandelfloatPipeline>();
 
+        if self.state == MandelfloatState::Loading {
+            return Ok(());
+        }
         {
             let mut pass = render_context
                 .command_encoder()
                 .begin_compute_pass(&ComputePassDescriptor::default());
 
-            // select the pipeline based on the current state
-            match self.state {
-                MandelfloatState::Loading => {}
-                MandelfloatState::Init => {
-                    let init_pipeline = pipeline_cache
-                        .get_compute_pipeline(pipeline.iter_init_pipeline)
-                        .unwrap();
-                    pass.set_bind_group(0, &bind_groups.iter[0], &[]);
-                    pass.set_pipeline(init_pipeline);
-                    pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
-                }
-                MandelfloatState::Update(index) => {
-                    let update_pipeline = pipeline_cache
-                        .get_compute_pipeline(pipeline.iter_update_pipeline)
-                        .unwrap();
-                    pass.set_bind_group(0, &bind_groups.iter[index], &[]);
-                    pass.set_pipeline(update_pipeline);
-                    pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
-                }
-            }
+                let update_pipeline = pipeline_cache
+                    .get_compute_pipeline(pipeline.iter_pipeline)
+                    .unwrap();
+                pass.set_bind_group(0, &bind_groups.iter, &[]);
+                pass.set_pipeline(update_pipeline);
+                pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
         }
         {
             let mut pass = render_context
                 .command_encoder()
                 .begin_compute_pass(&ComputePassDescriptor::default());
             
-            match self.state {
-                MandelfloatState::Loading => {}
-                MandelfloatState::Init => {
-                    let vis_pipeline = pipeline_cache
-                        .get_compute_pipeline(pipeline.vis_pipeline)
-                        .unwrap();
-                    pass.set_bind_group(0, &bind_groups.vis[0], &[]);
-                    pass.set_pipeline(vis_pipeline);
-                    pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
-                }
-                MandelfloatState::Update(index) => {
-                    let vis_pipeline = pipeline_cache
-                        .get_compute_pipeline(pipeline.vis_pipeline)
-                        .unwrap();
-                    pass.set_bind_group(0, &bind_groups.vis[index], &[]);
-                    pass.set_pipeline(vis_pipeline);
-                    pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
-                }
-            }
+            let vis_pipeline = pipeline_cache
+                .get_compute_pipeline(pipeline.vis_pipeline)
+                .unwrap();
+            pass.set_bind_group(0, &bind_groups.vis, &[]);
+            pass.set_pipeline(vis_pipeline);
+            pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
         }
         
 
