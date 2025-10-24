@@ -5,8 +5,15 @@
 
 @group(0) @binding(2) var<uniform> config: VisualizeUniforms;
 
+@group(0) @binding(3) var<uniform> shared_config: SharedUniforms;
+
 struct VisualizeUniforms {
-    test_color: vec4<f32>,
+    min_color: vec4<f32>,
+    max_color: vec4<f32>,
+}
+
+struct SharedUniforms {
+    max_iterations: u32,
 }
 
 struct IterationResult {
@@ -22,7 +29,8 @@ fn visualize(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     let input_index = invocation_id.x + textureDimensions.x * invocation_id.y;
     let i = input[input_index].i;
 
-    let color = config.test_color * vec4<f32>(f32(i) / 100.0);
+    let t = vec4<f32>(f32(i) / f32(shared_config.max_iterations));
+    let color = (1.0 - t) * config.min_color + t * config.max_color;
 
     textureStore(output, location, color);
 }

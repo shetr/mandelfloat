@@ -99,7 +99,12 @@ fn setup(
     });
     
     commands.insert_resource(VisualizeUniforms {
-        test_color: LinearRgba::WHITE,
+        min_color: LinearRgba::BLACK,
+        max_color: LinearRgba::WHITE,
+    });
+
+    commands.insert_resource(SharedUniforms {
+        max_iterations: 100,
     });
 
     commands.insert_resource(MandelfloatData {
@@ -119,9 +124,23 @@ struct MandelfloatData
     rotation_angle: f32,
 }
 
-fn ui_update(mut contexts: EguiContexts) -> Result {
-    egui::Window::new("Hello").show(contexts.ctx_mut()?, |ui| {
-        ui.label("world");
+fn ui_update(
+    mut contexts: EguiContexts,
+    mut vis_uniforms: ResMut<VisualizeUniforms>,
+    mut shared_uniforms: ResMut<SharedUniforms>,
+) -> Result {
+    egui::Window::new("Settings").show(contexts.ctx_mut()?, |ui| {
+        ui.label("Min color:");
+        let mut min_color = vis_uniforms.min_color.to_f32_array_no_alpha();
+        ui.color_edit_button_rgb(&mut min_color);
+        vis_uniforms.min_color = LinearRgba::from_f32_array_no_alpha(min_color);
+        ui.label("Max color:");
+        let mut max_color = vis_uniforms.max_color.to_f32_array_no_alpha();
+        ui.color_edit_button_rgb(&mut max_color);
+        vis_uniforms.max_color = LinearRgba::from_f32_array_no_alpha(max_color);
+
+        ui.label("Max iterations:");
+        ui.add(egui::DragValue::new(&mut shared_uniforms.max_iterations).speed(0.1));
     });
     Ok(())
 }
@@ -211,6 +230,7 @@ impl Plugin for MandelfloatComputePlugin {
             (ExtractResourcePlugin::<OutputImage>::default(),
             ExtractResourcePlugin::<IterationsUniforms>::default(),
             ExtractResourcePlugin::<VisualizeUniforms>::default(),
+            ExtractResourcePlugin::<SharedUniforms>::default(),
         ));
         let render_app = app.sub_app_mut(RenderApp);
         render_app.add_systems(
@@ -242,7 +262,13 @@ struct IterationsUniforms {
 
 #[derive(Resource, Clone, ExtractResource, ShaderType)]
 struct VisualizeUniforms {
-    test_color: LinearRgba,
+    min_color: LinearRgba,
+    max_color: LinearRgba,
+}
+
+#[derive(Resource, Clone, ExtractResource, ShaderType)]
+struct SharedUniforms {
+    max_iterations: u32,
 }
 
 #[derive(Resource, Clone, Copy, ExtractResource, ShaderType)]
@@ -265,6 +291,7 @@ fn prepare_bind_group(
     output_image: Res<OutputImage>,
     iterations_uniforms: Res<IterationsUniforms>,
     visualize_uniforms: Res<VisualizeUniforms>,
+    shared_uniforms: Res<SharedUniforms>,
     render_device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
 ) {
@@ -275,6 +302,9 @@ fn prepare_bind_group(
     
     let mut vis_uniform_buffer = UniformBuffer::from(visualize_uniforms.into_inner());
     vis_uniform_buffer.write_buffer(&render_device, &queue);
+    
+    let mut shared_uniform_buffer = UniformBuffer::from(shared_uniforms.into_inner());
+    shared_uniform_buffer.write_buffer(&render_device, &queue);
 
     let buffer_data = vec![IterationResult { i:0, z: Vec2::ZERO }; (SIZE.x * SIZE.y) as usize];
     let mut buffer1 = StorageBuffer::from(buffer_data.clone());
@@ -289,6 +319,7 @@ fn prepare_bind_group(
             &buffer1,
             &buffer2,
             &iter_uniform_buffer,
+            &shared_uniform_buffer,
         )),
     );
     let iter_bind_group_1 = render_device.create_bind_group(
@@ -298,6 +329,7 @@ fn prepare_bind_group(
             &buffer2,
             &buffer1,
             &iter_uniform_buffer,
+            &shared_uniform_buffer,
         )),
     );
     let vis_bind_group_0 = render_device.create_bind_group(
@@ -307,6 +339,7 @@ fn prepare_bind_group(
             &buffer2,
             &view.texture_view,
             &vis_uniform_buffer,
+            &shared_uniform_buffer,
         )),
     );
     let vis_bind_group_1 = render_device.create_bind_group(
@@ -316,6 +349,7 @@ fn prepare_bind_group(
             &buffer1,
             &view.texture_view,
             &vis_uniform_buffer,
+            &shared_uniform_buffer,
         )),
     );
     commands.insert_resource(MandelfloatBindGroups {
@@ -345,6 +379,7 @@ impl FromWorld for MandelfloatPipeline {
                     storage_buffer_read_only_sized(false, storage_size),
                     storage_buffer_sized(false, storage_size),
                     uniform_buffer::<IterationsUniforms>(false),
+                    uniform_buffer::<SharedUniforms>(false),
                 ),
             ),
         );
@@ -356,6 +391,7 @@ impl FromWorld for MandelfloatPipeline {
                     storage_buffer_read_only_sized(false, storage_size),
                     texture_storage_2d(TextureFormat::Rgba32Float, StorageTextureAccess::WriteOnly),
                     uniform_buffer::<VisualizeUniforms>(false),
+                    uniform_buffer::<SharedUniforms>(false),
                 ),
             ),
         );

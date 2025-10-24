@@ -5,9 +5,15 @@
 
 @group(0) @binding(2) var<uniform> config: IterationsUniforms;
 
+@group(0) @binding(3) var<uniform> shared_config: SharedUniforms;
+
 struct IterationsUniforms {
     transform: mat3x3<f32>,
     dimensions: vec2<u32>
+}
+
+struct SharedUniforms {
+    max_iterations: u32,
 }
 
 struct IterationResult {
@@ -40,7 +46,7 @@ fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     var z = vec2<f32>(0.0);
     var z2 = vec2<f32>(0.0);
     let c = positon;
-    while (i <= 100u && z2.x + z2.y <= 4.0)
+    while (i <= shared_config.max_iterations && z2.x + z2.y <= 4.0)
     {
         z = vec2<f32>(z2.x - z2.y, 2.0*z.x*z.y) + c;
         z2 = z * z;
