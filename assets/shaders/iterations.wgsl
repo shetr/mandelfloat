@@ -1,45 +1,52 @@
 
-@group(0) @binding(0) var input: texture_storage_2d<rgba32float, read>;
+@group(0) @binding(0) var<storage, read> input: array<IterationResult>;
 
-@group(0) @binding(1) var output: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(1) var<storage, read_write> output: array<IterationResult>;
 
-@group(0) @binding(2) var<uniform> config: MandelfloatUniforms;
+@group(0) @binding(2) var<uniform> config: IterationsUniforms;
 
-struct MandelfloatUniforms {
-    test_color: vec4<f32>,
+struct IterationsUniforms {
     transform: mat3x3<f32>,
+    dimensions: vec2<u32>
+}
+
+struct IterationResult {
+    z: vec2<f32>,
+    i: u32,
 }
 
 @compute @workgroup_size(8, 8, 1)
 fn init(@builtin(global_invocation_id) invocation_id: vec3<u32>, @builtin(num_workgroups) num_workgroups: vec3<u32>) {
-    let location = vec2<i32>(i32(invocation_id.x), i32(invocation_id.y));
+    let location = invocation_id.xy;
+    let dimensions = config.dimensions;
+    let storage_index = location.x + dimensions.x * location.y;
 
-    let color = vec4<f32>(1.0);
-
-    textureStore(output, location, color);
+    output[storage_index].i = 0u;
+    output[storage_index].z = vec2<f32>(0.0);
 }
 
 @compute @workgroup_size(8, 8, 1)
 fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
-    let location = vec2<i32>(i32(invocation_id.x), i32(invocation_id.y));
-    let textureDimensions = textureDimensions(output);
-    let ratio = f32(textureDimensions.x) / f32(textureDimensions.y);
+    let location = invocation_id.xy;
+    let dimensions = config.dimensions;
+    let storage_index = location.x + dimensions.x * location.y;
 
-    let normalized_location = (vec2<f32>(location) / vec2<f32>(textureDimensions) * 2.0 - 1.0) * vec2<f32>(ratio, -1.0);
+    let ratio = f32(dimensions.x) / f32(dimensions.y);
+
+    let normalized_location = (vec2<f32>(location) / vec2<f32>(dimensions) * 2.0 - 1.0) * vec2<f32>(ratio, -1.0);
     let positon = (config.transform * vec3<f32>(normalized_location, 1.0)).xy;
 
-    var i = 0;
+    var i = 0u;
     var z = vec2<f32>(0.0);
     var z2 = vec2<f32>(0.0);
     let c = positon;
-    while (i <= 100 && z2.x + z2.y <= 4.0)
+    while (i <= 100u && z2.x + z2.y <= 4.0)
     {
         z = vec2<f32>(z2.x - z2.y, 2.0*z.x*z.y) + c;
         z2 = z * z;
         i++;
     }
 
-    let color = config.test_color * vec4<f32>(f32(i) / 100.0);
-
-    textureStore(output, location, color);
+    output[storage_index].i = i;
+    output[storage_index].z = z;
 }

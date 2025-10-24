@@ -5,24 +5,19 @@
 
 use bevy::{
     asset::RenderAssetUsages, input::mouse::MouseWheel, prelude::*, render::{
-        extract_resource::{ExtractResource, ExtractResourcePlugin},
-        render_asset::RenderAssets,
-        render_graph::{self, RenderGraph, RenderLabel},
-        render_resource::{
-            binding_types::{texture_storage_2d, uniform_buffer},
+        extract_resource::{ExtractResource, ExtractResourcePlugin}, render_asset::RenderAssets, render_graph::{self, RenderGraph, RenderLabel}, render_resource::{
+            binding_types::{storage_buffer_read_only_sized, storage_buffer_sized, texture_storage_2d, uniform_buffer},
             *,
-        },
-        renderer::{RenderContext, RenderDevice, RenderQueue},
-        texture::GpuImage,
-        Render, RenderApp, RenderSystems,
+        }, renderer::{RenderContext, RenderDevice, RenderQueue}, texture::GpuImage, Render, RenderApp, RenderSystems
     }, ui::RelativeCursorPosition
     
 };
 use bevy_egui::{egui, input::egui_wants_any_input, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-use std::borrow::Cow;
+use std::{borrow::Cow, num::NonZero};
 
 /// This example uses a shader source file from the assets subdirectory
-const SHADER_ASSET_PATH: &str = "shaders/iterations.wgsl";
+const ITERATIONS_SHADER_ASSET_PATH: &str = "shaders/iterations.wgsl";
+const VISUALIZE_SHADER_ASSET_PATH: &str = "shaders/visualize.wgsl";
 
 const DISPLAY_FACTOR: u32 = 1;
 const SIZE: UVec2 = UVec2::new(1280 / DISPLAY_FACTOR, 720 / DISPLAY_FACTOR);
@@ -32,6 +27,8 @@ const KEY_ZOOM_SPEED: f32 = 0.25;
 const MOVE_SPEED: f32 = 1.0;
 const ROTATION_SPEED: f32 = 0.5;
 const SPEED_MULTIPILER: f32 = 2.0;
+
+//const BUFFER_DATA: [IterationResult; (SIZE.x * SIZE.y) as usize] = [IterationResult { i:0, z: Vec2::ZERO }; (SIZE.x * SIZE.y) as usize];
 
 fn main() {
     App::new()
@@ -53,20 +50,19 @@ fn main() {
         ))
         .add_systems(Startup, setup)
         .add_systems(EguiPrimaryContextPass, ui_update)
-        .add_systems(Update, (
-            update_input.run_if(not(egui_wants_any_input)),
-            switch_textures
-        ).chain())
+        .add_systems(Update, update_input.run_if(not(egui_wants_any_input)))
         .run();
 }
 
-fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+fn setup(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+) {
     let mut image = Image::new_target_texture(SIZE.x, SIZE.y, TextureFormat::Rgba32Float);
     image.asset_usage = RenderAssetUsages::RENDER_WORLD;
     image.texture_descriptor.usage =
         TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
-    let image0 = images.add(image.clone());
-    let image1 = images.add(image);
+    let image_handle = images.add(image);
 
     commands.spawn(Node {
         width: Val::Percent(100.0),
@@ -83,7 +79,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 ..default()
             },
             ImageNode {
-                image: image0.clone(),
+                image: image_handle.clone(),
                 ..default()
             },
             Transform::from_scale(Vec3::splat(DISPLAY_FACTOR as f32)),
@@ -93,14 +89,17 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     commands.spawn(Camera2d);
 
-    commands.insert_resource(MandelfloatImages {
-        texture_a: image0,
-        texture_b: image1,
+    commands.insert_resource(OutputImage {
+        texture: image_handle,
     });
 
-    commands.insert_resource(MandelfloatUniforms {
-        test_color: LinearRgba::WHITE,
+    commands.insert_resource(IterationsUniforms {
         transform: Mat3::IDENTITY,
+        dimensions: SIZE,
+    });
+    
+    commands.insert_resource(VisualizeUniforms {
+        test_color: LinearRgba::WHITE,
     });
 
     commands.insert_resource(MandelfloatData {
@@ -127,15 +126,6 @@ fn ui_update(mut contexts: EguiContexts) -> Result {
     Ok(())
 }
 
-// Switch texture to display every frame to show the one that was written to most recently.
-fn switch_textures(images: Res<MandelfloatImages>, mut img_node: Single<&mut ImageNode>) {
-    if img_node.image == images.texture_a {
-        img_node.image = images.texture_b.clone();
-    } else {
-        img_node.image = images.texture_a.clone();
-    }
-}
-
 fn compute_scale(zoom: f32) -> f32
 {
     10.0f32.powf(-zoom)
@@ -147,7 +137,7 @@ fn compute_transform(position: Vec2, scale: f32, rotation_angle: f32) -> Mat3
 }
 
 fn update_input(
-    mut uniforms: ResMut<MandelfloatUniforms>,
+    mut iterations_uniforms: ResMut<IterationsUniforms>,
     mut data: ResMut<MandelfloatData>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     relative_cursor_position: Single<&RelativeCursorPosition>,
@@ -205,7 +195,7 @@ fn update_input(
         data.position += rot_scale_mat.col(1) * MOVE_SPEED * speed_mul * time.delta_secs();
     }
 
-    uniforms.transform = compute_transform(data.position, scale, data.rotation_angle);
+    iterations_uniforms.transform = compute_transform(data.position, scale, data.rotation_angle);
 }
 
 struct MandelfloatComputePlugin;
@@ -218,8 +208,9 @@ impl Plugin for MandelfloatComputePlugin {
         // Extract the game of life image resource from the main world into the render world
         // for operation on by the compute shader and display on the sprite.
         app.add_plugins(
-            (ExtractResourcePlugin::<MandelfloatImages>::default(),
-            ExtractResourcePlugin::<MandelfloatUniforms>::default(),
+            (ExtractResourcePlugin::<OutputImage>::default(),
+            ExtractResourcePlugin::<IterationsUniforms>::default(),
+            ExtractResourcePlugin::<VisualizeUniforms>::default(),
         ));
         let render_app = app.sub_app_mut(RenderApp);
         render_app.add_systems(
@@ -239,106 +230,177 @@ impl Plugin for MandelfloatComputePlugin {
 }
 
 #[derive(Resource, Clone, ExtractResource)]
-struct MandelfloatImages {
-    texture_a: Handle<Image>,
-    texture_b: Handle<Image>,
+struct OutputImage {
+    texture: Handle<Image>,
 }
 
 #[derive(Resource, Clone, ExtractResource, ShaderType)]
-struct MandelfloatUniforms {
-    test_color: LinearRgba,
+struct IterationsUniforms {
     transform: Mat3,
+    dimensions: UVec2,
+}
+
+#[derive(Resource, Clone, ExtractResource, ShaderType)]
+struct VisualizeUniforms {
+    test_color: LinearRgba,
+}
+
+#[derive(Resource, Clone, Copy, ExtractResource, ShaderType)]
+struct IterationResult {
+    z: Vec2,
+    i: u32,
 }
 
 #[derive(Resource)]
-struct MandelfloatImageBindGroups([BindGroup; 2]);
+struct MandelfloatBindGroups
+{
+    iter: [BindGroup; 2],
+    vis: [BindGroup; 2],
+}
 
 fn prepare_bind_group(
     mut commands: Commands,
     pipeline: Res<MandelfloatPipeline>,
     gpu_images: Res<RenderAssets<GpuImage>>,
-    mandelfloat_images: Res<MandelfloatImages>,
-    mandelfloat_uniforms: Res<MandelfloatUniforms>,
+    output_image: Res<OutputImage>,
+    iterations_uniforms: Res<IterationsUniforms>,
+    visualize_uniforms: Res<VisualizeUniforms>,
     render_device: Res<RenderDevice>,
     queue: Res<RenderQueue>,
 ) {
-    let view_a = gpu_images.get(&mandelfloat_images.texture_a).unwrap();
-    let view_b = gpu_images.get(&mandelfloat_images.texture_b).unwrap();
+    let view = gpu_images.get(&output_image.texture).unwrap();
     
-    let mut uniform_buffer = UniformBuffer::from(mandelfloat_uniforms.into_inner());
-    uniform_buffer.write_buffer(&render_device, &queue);
+    let mut iter_uniform_buffer = UniformBuffer::from(iterations_uniforms.into_inner());
+    iter_uniform_buffer.write_buffer(&render_device, &queue);
+    
+    let mut vis_uniform_buffer = UniformBuffer::from(visualize_uniforms.into_inner());
+    vis_uniform_buffer.write_buffer(&render_device, &queue);
 
-    let bind_group_0 = render_device.create_bind_group(
+    let buffer_data = vec![IterationResult { i:0, z: Vec2::ZERO }; (SIZE.x * SIZE.y) as usize];
+    let mut buffer1 = StorageBuffer::from(buffer_data.clone());
+    let mut buffer2 = StorageBuffer::from(buffer_data);
+    buffer1.write_buffer(&render_device, &queue);
+    buffer2.write_buffer(&render_device, &queue);
+
+    let iter_bind_group_0 = render_device.create_bind_group(
         None,
-        &pipeline.texture_bind_group_layout,
+        &pipeline.iter_bind_group_layout,
         &BindGroupEntries::sequential((
-            &view_a.texture_view,
-            &view_b.texture_view,
-            &uniform_buffer,
+            &buffer1,
+            &buffer2,
+            &iter_uniform_buffer,
         )),
     );
-    let bind_group_1 = render_device.create_bind_group(
+    let iter_bind_group_1 = render_device.create_bind_group(
         None,
-        &pipeline.texture_bind_group_layout,
+        &pipeline.iter_bind_group_layout,
         &BindGroupEntries::sequential((
-            &view_b.texture_view,
-            &view_a.texture_view,
-            &uniform_buffer,
+            &buffer2,
+            &buffer1,
+            &iter_uniform_buffer,
         )),
     );
-    commands.insert_resource(MandelfloatImageBindGroups([bind_group_0, bind_group_1]));
+    let vis_bind_group_0 = render_device.create_bind_group(
+        None,
+        &pipeline.vis_bind_group_layout,
+        &BindGroupEntries::sequential((
+            &buffer2,
+            &view.texture_view,
+            &vis_uniform_buffer,
+        )),
+    );
+    let vis_bind_group_1 = render_device.create_bind_group(
+        None,
+        &pipeline.vis_bind_group_layout,
+        &BindGroupEntries::sequential((
+            &buffer1,
+            &view.texture_view,
+            &vis_uniform_buffer,
+        )),
+    );
+    commands.insert_resource(MandelfloatBindGroups {
+        iter: [iter_bind_group_0, iter_bind_group_1],
+        vis: [vis_bind_group_0, vis_bind_group_1],
+    });
 }
 
 #[derive(Resource)]
 struct MandelfloatPipeline {
-    texture_bind_group_layout: BindGroupLayout,
-    init_pipeline: CachedComputePipelineId,
-    update_pipeline: CachedComputePipelineId,
+    iter_bind_group_layout: BindGroupLayout,
+    vis_bind_group_layout: BindGroupLayout,
+    iter_init_pipeline: CachedComputePipelineId,
+    iter_update_pipeline: CachedComputePipelineId,
+    vis_pipeline: CachedComputePipelineId,
 }
 
 impl FromWorld for MandelfloatPipeline {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.resource::<RenderDevice>();
-        let texture_bind_group_layout = render_device.create_bind_group_layout(
-            "MandelfloatImages",
+        let storage_size = NonZero::<u64>::new((SIZE.x * SIZE.y * (size_of::<IterationResult>() as u32)) as u64);
+        let iter_bind_group_layout = render_device.create_bind_group_layout(
+            "IterLayout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
-                    texture_storage_2d(TextureFormat::Rgba32Float, StorageTextureAccess::ReadOnly),
-                    texture_storage_2d(TextureFormat::Rgba32Float, StorageTextureAccess::WriteOnly),
-                    uniform_buffer::<MandelfloatUniforms>(false),
+                    storage_buffer_read_only_sized(false, storage_size),
+                    storage_buffer_sized(false, storage_size),
+                    uniform_buffer::<IterationsUniforms>(false),
                 ),
             ),
         );
-        let shader = world.load_asset(SHADER_ASSET_PATH);
+        let vis_bind_group_layout = render_device.create_bind_group_layout(
+            "VisLayout",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::COMPUTE,
+                (
+                    storage_buffer_read_only_sized(false, storage_size),
+                    texture_storage_2d(TextureFormat::Rgba32Float, StorageTextureAccess::WriteOnly),
+                    uniform_buffer::<VisualizeUniforms>(false),
+                ),
+            ),
+        );
+        let iter_shader = world.load_asset(ITERATIONS_SHADER_ASSET_PATH);
+        let vis_shader = world.load_asset(VISUALIZE_SHADER_ASSET_PATH);
         let pipeline_cache = world.resource::<PipelineCache>();
-        let init_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+        let iter_init_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: None,
-            layout: vec![texture_bind_group_layout.clone()],
+            layout: vec![iter_bind_group_layout.clone()],
             push_constant_ranges: Vec::new(),
-            shader: shader.clone(),
+            shader: iter_shader.clone(),
             shader_defs: vec![],
             entry_point: Some(Cow::from("init")),
             zero_initialize_workgroup_memory: false,
         });
-        let update_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+        let iter_update_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: None,
-            layout: vec![texture_bind_group_layout.clone()],
+            layout: vec![iter_bind_group_layout.clone()],
             push_constant_ranges: Vec::new(),
-            shader,
+            shader: iter_shader,
             shader_defs: vec![],
             entry_point: Some(Cow::from("update")),
             zero_initialize_workgroup_memory: false,
         });
+        let vis_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+            label: None,
+            layout: vec![vis_bind_group_layout.clone()],
+            push_constant_ranges: Vec::new(),
+            shader: vis_shader,
+            shader_defs: vec![],
+            entry_point: Some(Cow::from("visualize")),
+            zero_initialize_workgroup_memory: false,
+        });
 
         MandelfloatPipeline {
-            texture_bind_group_layout,
-            init_pipeline,
-            update_pipeline,
+            iter_bind_group_layout,
+            vis_bind_group_layout,
+            iter_init_pipeline,
+            iter_update_pipeline,
+            vis_pipeline,
         }
     }
 }
 
+#[derive(PartialEq, Eq)]
 enum MandelfloatState {
     Loading,
     Init,
@@ -365,21 +427,38 @@ impl render_graph::Node for MandelfloatNode {
         // if the corresponding pipeline has loaded, transition to the next stage
         match self.state {
             MandelfloatState::Loading => {
-                match pipeline_cache.get_compute_pipeline_state(pipeline.init_pipeline) {
-                    CachedPipelineState::Ok(_) => {
-                        self.state = MandelfloatState::Init;
-                    }
+                let mut all_ok = true;
+                match pipeline_cache.get_compute_pipeline_state(pipeline.iter_init_pipeline) {
+                    CachedPipelineState::Ok(_) => {}
                     CachedPipelineState::Err(err) => {
-                        panic!("Initializing assets/{SHADER_ASSET_PATH}:\n{err}")
+                        panic!("Initializing assets/{ITERATIONS_SHADER_ASSET_PATH}:\n{err}")
                     }
-                    _ => {}
+                    _ => {
+                        all_ok = false;
+                    }
+                }
+                match pipeline_cache.get_compute_pipeline_state(pipeline.vis_pipeline) {
+                    CachedPipelineState::Ok(_) => {}
+                    CachedPipelineState::Err(err) => {
+                        panic!("Initializing assets/{VISUALIZE_SHADER_ASSET_PATH}:\n{err}")
+                    }
+                    _ => {
+                        all_ok = false;
+                    }
+                }
+                if all_ok {
+                    self.state = MandelfloatState::Init;
                 }
             }
             MandelfloatState::Init => {
                 if let CachedPipelineState::Ok(_) =
-                    pipeline_cache.get_compute_pipeline_state(pipeline.update_pipeline)
+                    pipeline_cache.get_compute_pipeline_state(pipeline.iter_update_pipeline)
                 {
-                    self.state = MandelfloatState::Update(1);
+                    if let CachedPipelineState::Ok(_) =
+                    pipeline_cache.get_compute_pipeline_state(pipeline.vis_pipeline)
+                    {
+                        self.state = MandelfloatState::Update(1);
+                    }
                 }
             }
             MandelfloatState::Update(0) => {
@@ -398,34 +477,62 @@ impl render_graph::Node for MandelfloatNode {
         render_context: &mut RenderContext,
         world: &World,
     ) -> Result<(), render_graph::NodeRunError> {
-        let bind_groups = &world.resource::<MandelfloatImageBindGroups>().0;
+        let bind_groups = world.resource::<MandelfloatBindGroups>();
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<MandelfloatPipeline>();
 
-        let mut pass = render_context
-            .command_encoder()
-            .begin_compute_pass(&ComputePassDescriptor::default());
+        {
+            let mut pass = render_context
+                .command_encoder()
+                .begin_compute_pass(&ComputePassDescriptor::default());
 
-        // select the pipeline based on the current state
-        match self.state {
-            MandelfloatState::Loading => {}
-            MandelfloatState::Init => {
-                let init_pipeline = pipeline_cache
-                    .get_compute_pipeline(pipeline.init_pipeline)
-                    .unwrap();
-                pass.set_bind_group(0, &bind_groups[0], &[]);
-                pass.set_pipeline(init_pipeline);
-                pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
-            }
-            MandelfloatState::Update(index) => {
-                let update_pipeline = pipeline_cache
-                    .get_compute_pipeline(pipeline.update_pipeline)
-                    .unwrap();
-                pass.set_bind_group(0, &bind_groups[index], &[]);
-                pass.set_pipeline(update_pipeline);
-                pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
+            // select the pipeline based on the current state
+            match self.state {
+                MandelfloatState::Loading => {}
+                MandelfloatState::Init => {
+                    let init_pipeline = pipeline_cache
+                        .get_compute_pipeline(pipeline.iter_init_pipeline)
+                        .unwrap();
+                    pass.set_bind_group(0, &bind_groups.iter[0], &[]);
+                    pass.set_pipeline(init_pipeline);
+                    pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
+                }
+                MandelfloatState::Update(index) => {
+                    let update_pipeline = pipeline_cache
+                        .get_compute_pipeline(pipeline.iter_update_pipeline)
+                        .unwrap();
+                    pass.set_bind_group(0, &bind_groups.iter[index], &[]);
+                    pass.set_pipeline(update_pipeline);
+                    pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
+                }
             }
         }
+        {
+            let mut pass = render_context
+                .command_encoder()
+                .begin_compute_pass(&ComputePassDescriptor::default());
+            
+            match self.state {
+                MandelfloatState::Loading => {}
+                MandelfloatState::Init => {
+                    let vis_pipeline = pipeline_cache
+                        .get_compute_pipeline(pipeline.vis_pipeline)
+                        .unwrap();
+                    pass.set_bind_group(0, &bind_groups.vis[0], &[]);
+                    pass.set_pipeline(vis_pipeline);
+                    pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
+                }
+                MandelfloatState::Update(index) => {
+                    let vis_pipeline = pipeline_cache
+                        .get_compute_pipeline(pipeline.vis_pipeline)
+                        .unwrap();
+                    pass.set_bind_group(0, &bind_groups.vis[index], &[]);
+                    pass.set_pipeline(vis_pipeline);
+                    pass.dispatch_workgroups(SIZE.x / WORKGROUP_SIZE, SIZE.y / WORKGROUP_SIZE, 1);
+                }
+            }
+        }
+        
 
         Ok(())
     }
